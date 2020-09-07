@@ -133,3 +133,6 @@ dmypy.json
 
 # data output files
 data/
+
+# zip files
+*.zip

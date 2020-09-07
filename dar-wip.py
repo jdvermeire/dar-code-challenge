@@ -8,8 +8,7 @@ import websockets
 from pandas import DataFrame
 
 # TODO add logging
-# TODO add exchange rate from: https://api.exchangeratesapi.io/latest?symbols=USD
-
+# TODO add threading
 
 ## MOCK ENVIRONMENT VARIABLES ##
 
@@ -27,10 +26,10 @@ MOCK_EV_URI = 'wss://ws-feed.pro.coinbase.com'
 MOCK_EV_PRODUCTS = ["BTC-USD", "BTC-EUR"]
 
 # interval, in seconds, to send data to CSV
-MOCK_EV_EXPORT_INTERVAL = 20
+MOCK_EV_EXPORT_INTERVAL = 600
 
 # interval, in seconds, to run app
-MOCK_EV_RUN_INTERVAL = 120
+MOCK_EV_RUN_INTERVAL = 3600
 
 # inverval, in seconds, to aggregate volume weighted average
 MOCK_EV_VWA_INTERVAL = 60
@@ -51,14 +50,32 @@ class Coinbase(object):
 	# TODO move these?
 	queues = {}
 
+	# TODO move this?
+	uri = MOCK_EV_URI
+
 	def __init__(
 		self,
-		websocket,
+		# websocket,
 		*args, 
 		**kwargs
 	):
 		# TODO clean up unnecessary params
-		self.ws = websocket
+		# self.ws = websocket
+		pass
+
+	async def connect(self):
+		"""
+		Connects to CoinBase websocket
+		"""
+		self.ws = await websockets.connect(self.uri)
+
+
+	async def close(self):
+		"""
+		Closes CoinBase websocket connection
+		"""
+		if not self.ws.closed:
+			await self.ws.close()
 
 
 	async def subscribe(self, products, channels):
@@ -127,7 +144,7 @@ class Coinbase(object):
 				self.queues["activate"] = []
 
 
-	async def message_handler(self, message):
+	def message_handler(self, message):
 		"""
 		Handles incoming messages from the websocket and redirects them to the appropriate handler
 
@@ -159,11 +176,11 @@ class Coinbase(object):
 			raise Exception("Invalid message type")
 
 		handler = handlers[message["type"]]
-		await handler(message)
+		handler(message)
 
 
 	# TODO clean these methods up. used brute force for simplicity.
-	async def heartbeat_handler(self, message):
+	def heartbeat_handler(self, message):
 		"""
 		Handler for heartbeat messages
 
@@ -177,7 +194,7 @@ class Coinbase(object):
 		# pass
 
 
-	async def snapshot_handler(self, message):
+	def snapshot_handler(self, message):
 		"""
 
 		Parameters
@@ -188,7 +205,7 @@ class Coinbase(object):
 		pass
 
 
-	async def l2update_handler(self, message):
+	def l2update_handler(self, message):
 		"""
 
 		Parameters
@@ -199,7 +216,7 @@ class Coinbase(object):
 		pass
 
 
-	async def status_handler(self, message):
+	def status_handler(self, message):
 		"""
 
 		Parameters
@@ -210,7 +227,7 @@ class Coinbase(object):
 		pass
 
 
-	async def ticker_handler(self, message):
+	def ticker_handler(self, message):
 		"""
 
 		Parameters
@@ -221,7 +238,7 @@ class Coinbase(object):
 		self.queues["ticker"].append(message)
 
 
-	async def received_handler(self, message):
+	def received_handler(self, message):
 		"""
 
 		Parameters
@@ -232,7 +249,7 @@ class Coinbase(object):
 		pass
 
 
-	async def open_handler(self, message):
+	def open_handler(self, message):
 		"""
 
 		Parameters
@@ -243,7 +260,7 @@ class Coinbase(object):
 		pass
 
 
-	async def done_handler(self, message):
+	def done_handler(self, message):
 		"""
 
 		Parameters
@@ -254,7 +271,7 @@ class Coinbase(object):
 		pass
 
 
-	async def match_handler(self, message):
+	def match_handler(self, message):
 		"""
 		Handle match type messages from coinbase websocket channel
 
@@ -267,7 +284,7 @@ class Coinbase(object):
 
 
 
-	async def change_handler(self, message):
+	def change_handler(self, message):
 		"""
 
 		Parameters
@@ -278,7 +295,7 @@ class Coinbase(object):
 		pass
 
 
-	async def activate_handler(self, message):
+	def activate_handler(self, message):
 		"""
 
 		Parameters
@@ -289,7 +306,7 @@ class Coinbase(object):
 		pass
 
 
-	async def subscriptions_handler(self, message):
+	def subscriptions_handler(self, message):
 		"""
 
 		Parameters
@@ -300,7 +317,7 @@ class Coinbase(object):
 		pass
 
 
-	async def error_handler(self, message):
+	def error_handler(self, message):
 		"""
 
 		Parameters
@@ -466,39 +483,43 @@ async def run():
 		hour=start_time.hour,
 		minute=start_time.minute) + export_interval
 
-	print("connecting to coinbase websocket...")
-
 	# TODO add error handling here with a try/catch block
 	#      allow for websocket to reconnect on timeout
-	async with websockets.connect(uri) as ws:
-		print("connected.")
+	cb = Coinbase()
 
-		ch = Coinbase(
-			websocket = ws,
-		)
+	await cb.connect()
 
-		# using the "matches" channel as it streams completed portions of orders
-		await ch.subscribe(products=MOCK_EV_PRODUCTS, channels=["heartbeat", "matches"])
-		
-		while datetime.datetime.utcnow() < end_time:
+	# using the "matches" channel as it streams completed portions of orders
+	await cb.subscribe(products=MOCK_EV_PRODUCTS, channels=["heartbeat", "matches"])
+	
+	while datetime.datetime.utcnow() < end_time:
 
-			resp = await ws.recv()
+		try:
+			resp = await cb.ws.recv()
 
-			await ch.message_handler(json.loads(resp))
+		except:
+			if cb.ws.closed:
+				await cb.connect()
+				await cb.subscribe(products=MOCK_EV_PRODUCTS, channels=["heartbeat", "matches"])
 
-			if datetime.datetime.utcnow() > next_dump_time:
-				dump_vwa(ch, path=dump_path, as_of=next_dump_time)
-				print('current dump time: %s' % next_dump_time)
+				continue
 
-				next_dump_time += export_interval
+		cb.message_handler(json.loads(resp))
 
-				print('next dump time: %s' % next_dump_time)
+		if datetime.datetime.utcnow() > next_dump_time:
+			dump_vwa(cb, path=dump_path, as_of=next_dump_time)
+			print('current dump time: %s' % next_dump_time)
 
-		print('closing...')
+			next_dump_time += export_interval
 
-		# dump remainder of queue
-		if len(ch.queues["match"]):
-			dump_vwa(ch, path=dump_path)
+			print('next dump time: %s' % next_dump_time)
+
+
+	await cb.close()
+
+	# dump remainder of queue
+	if len(cb.queues["match"]):
+		dump_vwa(cb, path=dump_path)
 
 
 asyncio.get_event_loop().run_until_complete(run())
