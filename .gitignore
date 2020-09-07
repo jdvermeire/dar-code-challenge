@@ -130,3 +130,6 @@ dmypy.json
 
 # Sublime
 *.sublime-*
+
+# data output files
+data/
